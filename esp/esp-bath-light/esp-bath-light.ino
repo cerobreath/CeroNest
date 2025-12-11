@@ -7,8 +7,11 @@
 // ---------------- Константи ----------------
 
 // Wi-Fi
-#define WIFI_SSID "YOUR_SSID" 
-#define WIFI_PASS "YOUR_PASSWORD" 
+#define WIFI_SSID "YOUR_SSID"
+#define WIFI_PASS "YOUR_PASSWORD"
+
+#define WIFI_SSID_BACKUP "YOUR_PHONE_HOTSPOT"
+#define WIFI_PASS_BACKUP "YOUR_PHONE_PASSWORD"
 
 const char* DEVICE_ID   = "esp-light-bathroom";
 const char* DEVICE_NAME = "ESP Light Bathroom";
@@ -117,20 +120,28 @@ void loop() {
 
 void setupWifi() {
   WiFi.mode(WIFI_STA);
+  
+  // Спроба підключення до основного WiFi
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-
   unsigned long start = millis();
+  
   while (WiFi.status() != WL_CONNECTED &&
          millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
     delay(250);
   }
+  
+  // Якщо основний WiFi не підключився - пробуємо резервний
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.begin(WIFI_SSID_BACKUP, WIFI_PASS_BACKUP);
+    start = millis();
+    
+    while (WiFi.status() != WL_CONNECTED &&
+           millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+      delay(250);
+    }
+  }
 
   wifiConnected = (WiFi.status() == WL_CONNECTED);
-
-  Serial.print("WiFi: ");
-  Serial.println(wifiConnected ? "connected" : "offline");
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
 }
 
 // ---------------- Дисплей + датчик ----------------
@@ -180,9 +191,6 @@ void updateLightState() {
       lightState.isOn = rawOn;
       lightState.hasValue = true;
       lightState.lastChangeMs = now;
-
-      Serial.print("Initial light state: ");
-      Serial.println(lightState.isOn ? "ON" : "OFF");
     }
     return;
   }
@@ -191,9 +199,6 @@ void updateLightState() {
       now - lastRawChangeMs >= LIGHT_DEBOUNCE_MS) {
     lightState.isOn = rawOn;
     lightState.lastChangeMs = now;
-
-    Serial.print("Light state changed: ");
-    Serial.println(lightState.isOn ? "ON" : "OFF");
   }
 }
 

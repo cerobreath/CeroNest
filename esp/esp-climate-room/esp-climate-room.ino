@@ -12,6 +12,9 @@
 #define WIFI_SSID "YOUR_SSID"
 #define WIFI_PASS "YOUR_PASSWORD"
 
+#define WIFI_SSID_BACKUP "YOUR_PHONE_HOTSPOT"
+#define WIFI_PASS_BACKUP "YOUR_PHONE_PASSWORD"
+
 const char* DEVICE_ID   = "esp-climate-room";
 const char* DEVICE_NAME = "ESP Climate Room";
 
@@ -30,13 +33,10 @@ const unsigned long DHT_MIN_INTERVAL_MS      = 2000;
 const unsigned long DISPLAY_INTERVAL_MS      = 1000;
 const unsigned long WIFI_CONNECT_TIMEOUT_MS  = 15000;
 
-// Висота: Чернігів (~130–140 м) + ~6-й поверх (~15–20 м) → ~150 м
 const float CHERNIHIV_ALTITUDE_M = 150.0f;
-
-// Зсув у hPa для підгонки під сайт (можна лишити 0.0f)
 const float PRESSURE_CALIBRATION_HPA = 0.0f;
 
-// ---------------- Глобальні об’єкти ----------------
+// ---------------- Глобальні об'єкти ----------------
 
 ESP8266WebServer server(80);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
@@ -51,7 +51,7 @@ bool bmpOk = false;
 struct Measurements {
   float temperature;
   float humidity;
-  float pressure; 
+  float pressure;
   unsigned long lastUpdateMs;
   bool hasTemperature;
   bool hasHumidity;
@@ -85,8 +85,6 @@ void handleInfoRequest();
 // ---------------- SETUP ----------------
 
 void setup() {
-  Serial.begin(115200);
-
   setupWifi();
   setupSensors();
   setupHttpServer();
@@ -135,20 +133,28 @@ void loop() {
 
 void setupWifi() {
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
 
+  // Спроба підключення до основного WiFi
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
   unsigned long start = millis();
+
   while (WiFi.status() != WL_CONNECTED &&
          millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
     delay(250);
   }
 
-  wifiConnected = (WiFi.status() == WL_CONNECTED);
+  // Якщо основний WiFi не підключився - пробуємо резервний
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.begin(WIFI_SSID_BACKUP, WIFI_PASS_BACKUP);
+    start = millis();
 
-  Serial.print("WiFi: ");
-  Serial.println(wifiConnected ? "connected" : "offline");
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
+    while (WiFi.status() != WL_CONNECTED &&
+           millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+      delay(250);
+    }
+  }
+
+  wifiConnected = (WiFi.status() == WL_CONNECTED);
 }
 
 // ---------------- Датчики та дисплей ----------------
@@ -223,9 +229,6 @@ void readBmp() {
   // Фізично адекватний діапазон для кімнатного барометра:
   // 800–1100 hPa. Все, що поза – вважаємо помилкою
   if (isnan(pLocal_hPa) || pLocal_hPa < 800.0f || pLocal_hPa > 1100.0f) {
-    Serial.print("Local P out of range: ");
-    Serial.print(pLocal_hPa, 2);
-    Serial.println(" hPa -> IGNORE");
     measurements.hasPressure = false;
     return;
   }
@@ -240,17 +243,9 @@ void readBmp() {
 
   // Ще одна перевірка
   if (pSea_hPa < 900.0f || pSea_hPa > 1100.0f) {
-    Serial.print("Sea-level P out of range: ");
-    Serial.print(pSea_hPa, 2);
-    Serial.println(" hPa -> IGNORE");
     measurements.hasPressure = false;
     return;
   }
-
-  Serial.print("Local P (hPa): ");
-  Serial.print(pLocal_hPa, 2);
-  Serial.print("  -> Sea-level P (hPa): ");
-  Serial.println(pSea_hPa, 2);
 
   measurements.pressure   = pSea_hPa;
   measurements.hasPressure = true;
