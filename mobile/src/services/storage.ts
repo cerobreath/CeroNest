@@ -3,7 +3,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   AppSettings,
   BlocksConfig,
-  ThemeMode,
   WeatherLocation,
   BlockId,
   PowerAddressConfig,
@@ -22,7 +21,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   powerScheduleNotificationsEnabled: true,
   espLightNotificationsEnabled: false,
   espLightCheckTime: '22:00-06:00',
-  espDeviceIpList: '',      // 👈 тільки список IP, без SSID
+  espDeviceIpList: '',
 };
 
 const DEFAULT_BLOCK_ORDER: BlockId[] = ['weather', 'power', 'devices'];
@@ -50,17 +49,6 @@ export async function setSettings(
   settings: AppSettings,
 ): Promise<void> {
   await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-}
-
-export async function getThemeMode(): Promise<ThemeMode> {
-  const settings = await getSettings();
-  return settings.themeMode;
-}
-
-export async function setThemeMode(mode: ThemeMode): Promise<void> {
-  const current = await getSettings();
-  const next: AppSettings = {...current, themeMode: mode};
-  await setSettings(next);
 }
 
 export async function getBlocksConfig(): Promise<BlocksConfig> {

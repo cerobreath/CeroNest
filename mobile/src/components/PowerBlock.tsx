@@ -26,7 +26,10 @@ import {
   PowerScheduleQuery,
 } from '../services/powerScheduleApi';
 import {getPowerAddresses, setPowerAddresses} from '../services/storage';
-import {persistPowerSchedule} from '../services/nativeStats';
+import {
+  persistPowerSchedule,
+  loadPowerScheduleFromDb,
+} from '../services/nativeStats';
 import {scheduleNextPowerOutageNotification} from '../services/notifications';
 
 interface Props {
@@ -226,12 +229,20 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
     async (config: AddressConfig) => {
       const query = configToQuery(config);
 
+      const now = new Date();
+      const from = new Date(now);
+      from.setDate(from.getDate() - 3);
+      const fromIso = from.toISOString();
+
+      let networkData: PowerScheduleItem[] = [];
+
       try {
-        const data = await fetchPowerSchedule(query);
+        networkData = await fetchPowerSchedule(query);
 
         const addressTitle = makeAddressTitle(config);
+
         try {
-          await persistPowerSchedule(config.id, addressTitle, data);
+          await persistPowerSchedule(config.id, addressTitle, networkData);
         } catch (e) {
           console.warn('[PowerBlock] failed to persist schedule', e);
         }
@@ -240,7 +251,7 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
           await scheduleNextPowerOutageNotification(
             config.id,
             addressTitle,
-            data,
+            networkData,
           );
         } catch (e) {
           console.warn(
@@ -248,15 +259,30 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
             e,
           );
         }
+      } catch (e: any) {
+        console.warn(
+          '[PowerBlock] fetchPowerSchedule error, using DB fallback',
+          e,
+        );
+      }
+
+      try {
+        const dbItems = await loadPowerScheduleFromDb(
+          config.id,
+          fromIso,
+        );
+
+        const finalItems =
+          dbItems.length > 0 ? dbItems : networkData;
 
         setAddresses(prev =>
           prev.map(a =>
             a.config.id === config.id
               ? {
                 ...a,
-                items: data,
+                items: finalItems,
                 loading: false,
-                error: data.length
+                error: finalItems.length
                   ? null
                   : 'Немає записів для вказаної адреси.',
               }
@@ -264,15 +290,23 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
           ),
         );
       } catch (e: any) {
+        console.warn(
+          '[PowerBlock] failed to load schedule from DB',
+          e,
+        );
+
         setAddresses(prev =>
           prev.map(a =>
             a.config.id === config.id
               ? {
                 ...a,
-                items: [],
+                items: networkData,
                 loading: false,
                 error:
-                  e?.message ?? 'Помилка завантаження графіка',
+                  networkData.length === 0
+                    ? e?.message ??
+                    'Помилка завантаження графіка'
+                    : null,
               }
               : a,
           ),
