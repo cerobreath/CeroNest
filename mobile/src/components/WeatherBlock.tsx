@@ -18,6 +18,7 @@ import {
   fetchCurrentWeather,
   searchWeatherLocations,
 } from '../services/weatherApi';
+import {loadWeatherHoursForRange} from '../services/nativeStats';
 
 type SimpleWeather = {
   time: string;
@@ -38,6 +39,21 @@ type WeatherBlockProps = {
   selectedDate?: Date;
   onLocationChange?: (loc: WeatherLocation) => void;
 };
+
+function getUtcDayRange(date: Date) {
+  const from = new Date(date);
+  from.setHours(0, 0, 0, 0);
+  const to = new Date(from);
+  to.setDate(to.getDate() + 1);
+  return {
+    fromIso: from.toISOString(),
+    toIso: to.toISOString(),
+  };
+}
+
+function isSameLocalDay(a: Date, b: Date) {
+  return a.toDateString() === b.toDateString();
+}
 
 function mapSymbolToIcon(symbolCode?: string): string {
   const code = (symbolCode || '').toLowerCase();
@@ -112,41 +128,123 @@ const WeatherBlock: React.FC<WeatherBlockProps> = ({
     if (!location) {
       setWeather(null);
       setHourly([]);
+      setError(null);
       return;
     }
 
+    const targetDate = selectedDate ?? new Date();
+    const today = new Date();
+
+    const startToday = new Date(today);
+    startToday.setHours(0, 0, 0, 0);
+
+    const startTarget = new Date(targetDate);
+    startTarget.setHours(0, 0, 0, 0);
+
+    const isPast = startTarget.getTime() < startToday.getTime();
+
+    setLoading(true);
+    setError(null);
+    setWeather(null);
+    setHourly([]);
+
     try {
-      setLoading(true);
-      setError(null);
-      setWeather(null);
-      setHourly([]);
+      if (isPast) {
+        const {fromIso, toIso} = getUtcDayRange(targetDate);
+        const hours = await loadWeatherHoursForRange(
+          location.id,
+          fromIso,
+          toIso,
+        );
 
-      const data = await fetchCurrentWeather(location);
+        if (!hours.length) {
+          setError(
+            'Немає збережених даних погоди для цієї дати.',
+          );
+          return;
+        }
 
-      const simple: SimpleWeather = {
-        time: data.time,
-        temperature: data.temperature,
-        humidity: data.humidity,
-        windSpeed: data.windSpeed,
-        symbolCode: data.symbolCode,
-      };
-
-      const mappedHourly: HourlyPoint[] =
-        (data.hourly ?? []).map(h => ({
+        const mapped: HourlyPoint[] = hours.map(h => ({
           time: h.time,
           temperature: h.temperature,
           symbolCode: h.symbolCode,
         }));
 
-      setWeather(simple);
-      setHourly(mappedHourly);
+        const mid = mapped[Math.floor(mapped.length / 2)];
+
+        setHourly(mapped);
+        setWeather({
+          time: mid.time,
+          temperature: mid.temperature,
+          humidity: undefined,
+          windSpeed: undefined,
+          symbolCode: mid.symbolCode,
+        });
+      } else {
+        const data = await fetchCurrentWeather(location);
+
+        const mappedHourly: HourlyPoint[] =
+          (data.hourly ?? []).map(h => ({
+            time: h.time,
+            temperature: h.temperature,
+            symbolCode: h.symbolCode,
+          }));
+
+        setWeather({
+          time: data.time,
+          temperature: data.temperature,
+          humidity: data.humidity,
+          windSpeed: data.windSpeed,
+          symbolCode: data.symbolCode,
+        });
+        setHourly(mappedHourly);
+      }
     } catch (e: any) {
       console.error('[WeatherBlock] fetch error', e);
+
+      if (!isPast) {
+        try {
+          const {fromIso, toIso} = getUtcDayRange(targetDate);
+          const hours = await loadWeatherHoursForRange(
+            location.id,
+            fromIso,
+            toIso,
+          );
+
+          if (hours.length) {
+            const mapped: HourlyPoint[] = hours.map(h => ({
+              time: h.time,
+              temperature: h.temperature,
+              symbolCode: h.symbolCode,
+            }));
+            const mid = mapped[Math.floor(mapped.length / 2)];
+
+            setHourly(mapped);
+            setWeather({
+              time: mid.time,
+              temperature: mid.temperature,
+              humidity: undefined,
+              windSpeed: undefined,
+              symbolCode: mid.symbolCode,
+            });
+            setError(
+              'Показано збережені локальні дані погоди (без оновлення з Інтернету).',
+            );
+            return;
+          }
+        } catch (inner) {
+          console.warn(
+            '[WeatherBlock] local weather fallback failed',
+            inner,
+          );
+        }
+      }
+
       setError(e?.message ?? 'Помилка завантаження погоди');
     } finally {
       setLoading(false);
     }
-  }, [location]);
+  }, [location, selectedDate]);
 
   useEffect(() => {
     fetchWeather();
@@ -236,12 +334,12 @@ const WeatherBlock: React.FC<WeatherBlockProps> = ({
 
     const today = new Date();
 
-    if (selectedDate.toDateString() === today.toDateString()) {
+    if (isSameLocalDay(selectedDate, today)) {
       return weather;
     }
 
     if (visibleHourly.length === 0) {
-      return weather;
+      return null;
     }
 
     const mid = visibleHourly[Math.floor(visibleHourly.length / 2)];

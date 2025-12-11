@@ -79,14 +79,14 @@ class CeroNestStatsModule(
                 }
 
                 val now = Instant.now()
-                val sevenDaysAgo =
-                    now.minus(7, ChronoUnit.DAYS).toString()
+                val threeDaysAgo =
+                    now.minus(3, ChronoUnit.DAYS).toString()
 
                 db.runInTransaction {
                     if (entities.isNotEmpty()) {
                         dao.insertAll(entities)
                     }
-                    dao.deleteOlderThan(sevenDaysAgo)
+                    dao.deleteOlderThan(threeDaysAgo)
                 }
 
                 UiThreadUtil.runOnUiThread {
@@ -176,15 +176,14 @@ class CeroNestStatsModule(
                 }
 
                 val now = Instant.now()
-                val sevenDaysAgo =
-                    now.minus(7, ChronoUnit.DAYS).toString()
+                val threeDaysAgo =
+                    now.minus(3, ChronoUnit.DAYS).toString()
 
                 db.runInTransaction {
-                    dao.deleteForAddress(addressId)
                     if (entities.isNotEmpty()) {
                         dao.insertAll(entities)
                     }
-                    dao.deleteOlderThan(sevenDaysAgo)
+                    dao.deleteOlderThan(threeDaysAgo)
                 }
 
                 UiThreadUtil.runOnUiThread {
@@ -268,8 +267,8 @@ class CeroNestStatsModule(
 
                 val now = Instant.now()
                 val oneDayAgo = now.minus(1, ChronoUnit.DAYS).toString()
-                val sevenDaysAgoDate = now
-                    .minus(7, ChronoUnit.DAYS)
+                val threeDaysAgoDate = now
+                    .minus(3, ChronoUnit.DAYS)
                     .atOffset(ZoneOffset.UTC)
                     .toLocalDate()
                     .toString()
@@ -282,7 +281,7 @@ class CeroNestStatsModule(
                         val dailyMap =
                             mutableMapOf<String, MutableList<EspHourlyForAggregation>>()
                         for (h in forAgg) {
-                            val day = h.timeUtc.take(10) // YYYY-MM-DD
+                            val day = h.timeUtc.take(10)
                             val key = "${h.deviceId}#$day"
                             dailyMap.getOrPut(key) { mutableListOf() }
                                 .add(h)
@@ -325,7 +324,7 @@ class CeroNestStatsModule(
                         }
                     }
 
-                    dao.deleteDailyOlderThan(sevenDaysAgoDate)
+                    dao.deleteDailyOlderThan(threeDaysAgoDate)
                 }
 
                 UiThreadUtil.runOnUiThread {
