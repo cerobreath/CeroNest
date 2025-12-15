@@ -37,6 +37,24 @@ CeroNest is a React Native mobile app paired with ESP8266-based sensors that mon
 4. Power schedules fetched from Chernihivoblenergo, cached per address
 5. All settings in AsyncStorage, history in local SQLite database
 
+## Tech Stack
+
+### Mobile App
+- **React Native** 0.82.1 with TypeScript
+- **React Navigation** — native stack navigator
+- **React Native Paper** — Material Design components
+- **Notifee** — local notifications
+- **AsyncStorage** — settings persistence
+- **NetInfo** — network state detection
+- **Room Database** (Android native) — historical data storage
+
+### ESP8266 Firmware
+- **ESP8266WiFi** — network connectivity with dual WiFi support
+- **ESP8266WebServer** — HTTP endpoint serving
+- **Adafruit GFX** + **Adafruit SSD1306** — OLED display
+- **DHT sensor library** — temperature/humidity reading
+- **Adafruit BMP085** — barometric pressure sensor
+
 ## Quick Start
 
 ### Mobile App
