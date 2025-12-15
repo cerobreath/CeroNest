@@ -20,9 +20,9 @@ CeroNest is a React Native mobile app paired with ESP8266-based sensors that mon
 ![Mobile UI](screenshots/02-mobile-ui.png)
 
 ### Hardware
-| ESP Climate Room | ESP Bath Light |
-|-----------------|----------------|
-| ![Climate schematic](screenshots/03-esp-climate-room-schematic.png) | ![Light schematic](screenshots/04-esp-bath-light-schematic.png) |
+| ESP Bath Light                                                  | ESP Climate Room                                     |
+|-----------------------------------------------------------------|---------------------------------------------------------------------|
+| ![Light schematic](screenshots/04-esp-bath-light-schematic.png) | ![Climate schematic](screenshots/03-esp-climate-room-schematic.png) |
 
 ![Real wiring](screenshots/05-real-wiring.png)
 
