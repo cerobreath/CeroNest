@@ -73,6 +73,26 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = file("keystore/keystore.properties") // ВАЖЛИВО: відносно android/app/
+
+if (!keystorePropertiesFile.exists()) {
+    throw new GradleException("keystore.properties not found: ${keystorePropertiesFile.absolutePath}")
+}
+
+keystorePropertiesFile.withInputStream { stream ->
+    keystoreProperties.load(stream)
+}
+
+def storeFileProp = keystoreProperties.getProperty("storeFile")
+def storePasswordProp = keystoreProperties.getProperty("storePassword")
+def keyAliasProp = keystoreProperties.getProperty("keyAlias")
+def keyPasswordProp = keystoreProperties.getProperty("keyPassword")
+
+if (!storeFileProp) {
+    throw new GradleException("Missing 'storeFile' in ${keystorePropertiesFile.absolutePath}")
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -84,15 +104,21 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
-        versionName "1.0"
+        versionName "0.4.2"
     }
     signingConfigs {
         debug {
-            storeFile file('debug.keystore')
-            storePassword 'android'
-            keyAlias 'androiddebugkey'
-            keyPassword 'android'
+            storeFile = file('debug.keystore')
+            storePassword = 'android'
+            keyAlias = 'androiddebugkey'
+            keyPassword = 'android'
         }
+        release {
+            storeFile = file(storeFileProp)
+            storePassword = storePasswordProp
+            keyAlias = keyAliasProp
+            keyPassword = keyPasswordProp
+         }
     }
     buildTypes {
         debug {
@@ -101,7 +127,7 @@ android {
         release {
             // Caution! In production, you need to generate your own keystore file.
             // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
