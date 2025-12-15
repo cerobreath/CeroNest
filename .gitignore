@@ -63,3 +63,8 @@ coverage/
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Keys
+mobile/android/app/keystore/keystore.properties
+mobile/android/app/keystore/
+*.jks
