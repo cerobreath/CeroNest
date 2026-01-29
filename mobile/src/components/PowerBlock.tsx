@@ -1,6 +1,5 @@
-// src/components/PowerBlock.tsx
 import * as React from 'react';
-import {StyleSheet, View, ScrollView, Pressable} from 'react-native';
+import {StyleSheet, View, ScrollView, Pressable, AppState} from 'react-native';
 import {
   ActivityIndicator,
   Card,
@@ -13,6 +12,7 @@ import {
   Chip,
   Divider,
   Menu,
+  useTheme,
 } from 'react-native-paper';
 import {PowerScheduleItem, PowerAddressConfig} from '../types';
 import {
@@ -26,11 +26,9 @@ import {
   PowerScheduleQuery,
 } from '../services/powerScheduleApi';
 import {getPowerAddresses, setPowerAddresses} from '../services/storage';
-import {
-  persistPowerSchedule,
-  loadPowerScheduleFromDb,
-} from '../services/nativeStats';
+import {persistPowerSchedule, loadPowerScheduleFromDb} from '../services/nativeStats';
 import {scheduleNextPowerOutageNotification} from '../services/notifications';
+import {scanEspDevices} from '../services/espApi';
 
 interface Props {
   onConfigure?: () => void;
@@ -46,6 +44,12 @@ type AddressEntry = {
   error: string | null;
 };
 
+type ScheduleNow = {
+  expectedPowerNow: boolean | null;
+  activeOutage: PowerScheduleItem | null;
+  sourcesWithItems: number;
+};
+
 function extractTimeLabel(dateTime: string): string {
   const match = dateTime.match(/(\d{1,2}:\d{2})/);
   return match ? match[1] : dateTime;
@@ -54,11 +58,7 @@ function extractTimeLabel(dateTime: string): string {
 function formatDuration(start: string, end: string): string {
   const s = new Date(start);
   const e = new Date(end);
-  if (
-    Number.isNaN(s.getTime()) ||
-    Number.isNaN(e.getTime()) ||
-    e.getTime() <= s.getTime()
-  ) {
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime()) || e.getTime() <= s.getTime()) {
     return '';
   }
 
@@ -66,12 +66,8 @@ function formatDuration(start: string, end: string): string {
   const hours = Math.floor(minutesTotal / 60);
   const minutes = minutesTotal % 60;
 
-  if (hours && minutes) {
-    return `${hours} год ${minutes} хв`;
-  }
-  if (hours) {
-    return `${hours} год`;
-  }
+  if (hours && minutes) return `${hours} год ${minutes} хв`;
+  if (hours) return `${hours} год`;
   return `${minutes} хв`;
 }
 
@@ -83,8 +79,7 @@ function isSameDayIso(iso: string, date: Date): boolean {
 
 function makeAddressTitle(config: AddressConfig): string {
   const housePart = config.house.trim() ? `, буд. ${config.house.trim()}` : '';
-  const typeLabel =
-    config.consumerKind === 'household' ? 'Побутові' : 'Юридичні';
+  const typeLabel = config.consumerKind === 'household' ? 'Побутові' : 'Юридичні';
   return `${config.cityName}, ${config.secondLevelName}${housePart} (${typeLabel})`;
 }
 
@@ -106,42 +101,62 @@ function configToQuery(config: AddressConfig): PowerScheduleQuery {
   };
 }
 
+function getScheduleNow(addresses: AddressEntry[], at: Date): ScheduleNow {
+  const atMs = at.getTime();
+  let sourcesWithItems = 0;
+
+  for (const addr of addresses) {
+    if (!addr.items?.length) continue;
+    sourcesWithItems += 1;
+
+    const active = addr.items.find(it => {
+      const s = new Date(it.start).getTime();
+      const e = new Date(it.end).getTime();
+      if (Number.isNaN(s) || Number.isNaN(e)) return false;
+      return atMs >= s && atMs <= e;
+    });
+
+    if (active) return {expectedPowerNow: false, activeOutage: active, sourcesWithItems};
+  }
+
+  if (sourcesWithItems > 0) return {expectedPowerNow: true, activeOutage: null, sourcesWithItems};
+  return {expectedPowerNow: null, activeOutage: null, sourcesWithItems: 0};
+}
+
+const ELECTRICITY_CHECK_INTERVAL_MS = 30_000;
+
 const PowerBlock: React.FC<Props> = ({selectedDate}) => {
+  const theme = useTheme();
+
   const [addresses, setAddresses] = React.useState<AddressEntry[]>([]);
-
-  const [editingAddressId, setEditingAddressId] =
-    React.useState<string | null>(null);
-
+  const [editingAddressId, setEditingAddressId] = React.useState<string | null>(null);
   const [dialogVisible, setDialogVisible] = React.useState(false);
+  const [consumerKind, setConsumerKind] = React.useState<PowerConsumerKind>('household');
 
-  const [consumerKind, setConsumerKind] =
-    React.useState<PowerConsumerKind>('household');
-
-  const [departments, setDepartments] =
-    React.useState<DepartmentOption[]>([]);
+  const [departments, setDepartments] = React.useState<DepartmentOption[]>([]);
   const [departLoading, setDepartLoading] = React.useState(false);
-  const [departError, setDepartError] =
-    React.useState<string | null>(null);
-  const [selectedDepartment, setSelectedDepartment] =
-    React.useState<DepartmentOption | null>(null);
-  const [departMenuVisible, setDepartMenuVisible] =
-    React.useState(false);
+  const [departError, setDepartError] = React.useState<string | null>(null);
+  const [selectedDepartment, setSelectedDepartment] = React.useState<DepartmentOption | null>(null);
+  const [departMenuVisible, setDepartMenuVisible] = React.useState(false);
 
   const [cityQuery, setCityQuery] = React.useState('');
   const [cities, setCities] = React.useState<SimpleOption[]>([]);
   const [cityLoading, setCityLoading] = React.useState(false);
-  const [selectedCity, setSelectedCity] =
-    React.useState<SimpleOption | null>(null);
+  const [selectedCity, setSelectedCity] = React.useState<SimpleOption | null>(null);
 
   const [streetQuery, setStreetQuery] = React.useState('');
   const [streets, setStreets] = React.useState<SimpleOption[]>([]);
   const [streetLoading, setStreetLoading] = React.useState(false);
-  const [selectedStreet, setSelectedStreet] =
-    React.useState<SimpleOption | null>(null);
+  const [selectedStreet, setSelectedStreet] = React.useState<SimpleOption | null>(null);
 
   const [house, setHouse] = React.useState('');
-  const [configError, setConfigError] =
-    React.useState<string | null>(null);
+  const [configError, setConfigError] = React.useState<string | null>(null);
+
+  const [electricityAvailable, setElectricityAvailable] = React.useState<boolean | null>(null);
+  const [electricityChecking, setElectricityChecking] = React.useState<boolean>(false);
+  const [electricityTick, setElectricityTick] = React.useState(0);
+
+  const electricityInFlightRef = React.useRef(false);
 
   const ensureDepartmentsLoaded = React.useCallback(() => {
     if (departments.length) return;
@@ -154,9 +169,7 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
         setDepartments(deps);
         setSelectedDepartment(prev => prev ?? deps[0] ?? null);
       } catch (e: any) {
-        setDepartError(
-          e?.message || 'Помилка завантаження підрозділів',
-        );
+        setDepartError(e?.message || 'Помилка завантаження підрозділів');
       } finally {
         setDepartLoading(false);
       }
@@ -188,29 +201,17 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
       setEditingAddressId(entry.config.id);
       setConsumerKind(entry.config.consumerKind);
 
-      if (
-        entry.config.departmentId &&
-        entry.config.departmentLabel
-      ) {
-        setSelectedDepartment({
-          value: entry.config.departmentId,
-          label: entry.config.departmentLabel,
-        });
+      if (entry.config.departmentId && entry.config.departmentLabel) {
+        setSelectedDepartment({value: entry.config.departmentId, label: entry.config.departmentLabel});
       } else {
         setSelectedDepartment(null);
       }
 
       setCityQuery(entry.config.cityName);
-      setSelectedCity({
-        id: entry.config.cityId,
-        name: entry.config.cityName,
-      });
+      setSelectedCity({id: entry.config.cityId, name: entry.config.cityName});
 
       setStreetQuery(entry.config.secondLevelName);
-      setSelectedStreet({
-        id: entry.config.secondLevelId,
-        name: entry.config.secondLevelName,
-      });
+      setSelectedStreet({id: entry.config.secondLevelId, name: entry.config.secondLevelName});
 
       setHouse(entry.config.house);
       setConfigError(null);
@@ -225,104 +226,93 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
     setConfigError(null);
   };
 
-  const loadScheduleForConfig = React.useCallback(
-    async (config: AddressConfig) => {
-      const query = configToQuery(config);
+  const loadScheduleForConfig = React.useCallback(async (config: AddressConfig) => {
+    const query = configToQuery(config);
 
-      const now = new Date();
-      const from = new Date(now);
-      from.setDate(from.getDate() - 3);
-      const fromIso = from.toISOString();
+    const now = new Date();
+    const from = new Date(now);
+    from.setDate(from.getDate() - 3);
+    const fromIso = from.toISOString();
 
-      let networkData: PowerScheduleItem[] = [];
+    let networkData: PowerScheduleItem[] = [];
+
+    try {
+      networkData = await fetchPowerSchedule(query);
+
+      const addressTitle = makeAddressTitle(config);
 
       try {
-        networkData = await fetchPowerSchedule(query);
-
-        const addressTitle = makeAddressTitle(config);
-
-        try {
-          await persistPowerSchedule(config.id, addressTitle, networkData);
-        } catch (e) {
-          console.warn('[PowerBlock] failed to persist schedule', e);
-        }
-
-        try {
-          await scheduleNextPowerOutageNotification(
-            config.id,
-            addressTitle,
-            networkData,
-          );
-        } catch (e) {
-          console.warn(
-            '[PowerBlock] failed to schedule power notifications',
-            e,
-          );
-        }
-      } catch (e: any) {
-        console.warn(
-          '[PowerBlock] fetchPowerSchedule error, using DB fallback',
-          e,
-        );
+        await persistPowerSchedule(config.id, addressTitle, networkData);
+      } catch (e) {
+        console.warn('[PowerBlock] failed to persist schedule', e);
       }
 
       try {
-        const dbItems = await loadPowerScheduleFromDb(
-          config.id,
-          fromIso,
-        );
-
-        const finalItems =
-          dbItems.length > 0 ? dbItems : networkData;
-
-        setAddresses(prev =>
-          prev.map(a =>
-            a.config.id === config.id
-              ? {
-                ...a,
-                items: finalItems,
-                loading: false,
-                error: finalItems.length
-                  ? null
-                  : 'Немає записів для вказаної адреси.',
-              }
-              : a,
-          ),
-        );
-      } catch (e: any) {
-        console.warn(
-          '[PowerBlock] failed to load schedule from DB',
-          e,
-        );
-
-        setAddresses(prev =>
-          prev.map(a =>
-            a.config.id === config.id
-              ? {
-                ...a,
-                items: networkData,
-                loading: false,
-                error:
-                  networkData.length === 0
-                    ? e?.message ??
-                    'Помилка завантаження графіка'
-                    : null,
-              }
-              : a,
-          ),
-        );
+        await scheduleNextPowerOutageNotification(config.id, addressTitle, networkData);
+      } catch (e) {
+        console.warn('[PowerBlock] failed to schedule power notifications', e);
       }
-    },
-    [],
-  );
+    } catch (e: any) {
+      console.warn('[PowerBlock] fetchPowerSchedule error, using DB fallback', e);
+    }
+
+    try {
+      const dbItems = await loadPowerScheduleFromDb(config.id, fromIso);
+      const finalItems = dbItems.length > 0 ? dbItems : networkData;
+
+      setAddresses(prev =>
+        prev.map(a =>
+          a.config.id === config.id
+            ? {
+              ...a,
+              items: finalItems,
+              loading: false,
+              error: finalItems.length ? null : 'Немає записів для вказаної адреси.',
+            }
+            : a,
+        ),
+      );
+    } catch (e: any) {
+      console.warn('[PowerBlock] failed to load schedule from DB', e);
+
+      setAddresses(prev =>
+        prev.map(a =>
+          a.config.id === config.id
+            ? {
+              ...a,
+              items: networkData,
+              loading: false,
+              error: networkData.length === 0 ? e?.message ?? 'Помилка завантаження графіка' : null,
+            }
+            : a,
+        ),
+      );
+    }
+  }, []);
+
+  const checkElectricityStatus = React.useCallback(async () => {
+    if (electricityInFlightRef.current) return;
+    electricityInFlightRef.current = true;
+
+    setElectricityChecking(true);
+    try {
+      const devices = await scanEspDevices();
+      setElectricityAvailable(devices.length > 0);
+    } catch (e) {
+      console.warn('[PowerBlock] failed to check electricity status', e);
+      setElectricityAvailable(null);
+    } finally {
+      setElectricityTick(t => t + 1);
+      setElectricityChecking(false);
+      electricityInFlightRef.current = false;
+    }
+  }, []);
 
   React.useEffect(() => {
     (async () => {
       try {
         const saved = await getPowerAddresses();
-        if (!saved || !saved.length) {
-          return;
-        }
+        if (!saved || !saved.length) return;
 
         setAddresses(
           saved.map(cfg => ({
@@ -346,6 +336,23 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
     void setPowerAddresses(addresses.map(a => a.config));
   }, [addresses]);
 
+  React.useEffect(() => {
+    void checkElectricityStatus();
+
+    const intervalId = setInterval(() => {
+      void checkElectricityStatus();
+    }, ELECTRICITY_CHECK_INTERVAL_MS);
+
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') void checkElectricityStatus();
+    });
+
+    return () => {
+      clearInterval(intervalId);
+      sub.remove();
+    };
+  }, [checkElectricityStatus]);
+
   const handleDeleteAddress = (id: string) => {
     setAddresses(prev => prev.filter(a => a.config.id !== id));
   };
@@ -358,21 +365,15 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
     setStreetQuery('');
     setCities([]);
 
-    if (!selectedDepartment) {
-      return;
-    }
+    if (!selectedDepartment) return;
+
     const trimmed = text.trim();
-    if (trimmed.length < 2) {
-      return;
-    }
+    if (trimmed.length < 2) return;
 
     try {
       setCityLoading(true);
       setConfigError(null);
-      const res = await fetchCities(
-        selectedDepartment.value,
-        trimmed,
-      );
+      const res = await fetchCities(selectedDepartment.value, trimmed);
       setCities(res);
     } catch (e: any) {
       setConfigError(e?.message || 'Помилка пошуку міст');
@@ -395,29 +396,20 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
     setSelectedStreet(null);
     setStreets([]);
 
-    if (!selectedCity) {
-      return;
-    }
+    if (!selectedCity) return;
+
     const trimmed = text.trim();
-    if (trimmed.length < 2) {
-      return;
-    }
+    if (trimmed.length < 2) return;
 
     try {
       setStreetLoading(true);
       setConfigError(null);
-      const res = await fetchAddressOptions(
-        consumerKind,
-        selectedCity.id,
-        trimmed,
-      );
+      const res = await fetchAddressOptions(consumerKind, selectedCity.id, trimmed);
       setStreets(res);
     } catch (e: any) {
       setConfigError(
         e?.message ||
-        (consumerKind === 'business'
-          ? 'Помилка пошуку юридичних осіб'
-          : 'Помилка пошуку вулиць'),
+        (consumerKind === 'business' ? 'Помилка пошуку юридичних осіб' : 'Помилка пошуку вулиць'),
       );
     } finally {
       setStreetLoading(false);
@@ -436,11 +428,7 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
       return;
     }
     if (!selectedStreet) {
-      setConfigError(
-        consumerKind === 'business'
-          ? 'Оберіть юридичну особу'
-          : 'Оберіть вулицю',
-      );
+      setConfigError(consumerKind === 'business' ? 'Оберіть юридичну особу' : 'Оберіть вулицю');
       return;
     }
 
@@ -508,9 +496,107 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
   };
 
   const secondLevelLabel =
-    consumerKind === 'business'
-      ? 'Почніть вводити назву юридичної особи'
-      : 'Почніть вводити назву вулиці';
+    consumerKind === 'business' ? 'Почніть вводити назву юридичної особи' : 'Почніть вводити назву вулиці';
+
+  const scheduleNow = React.useMemo(() => {
+    return getScheduleNow(addresses, new Date());
+  }, [addresses, electricityTick]);
+
+  const renderElectricityBanner = () => {
+    const devicesState: 'online' | 'offline' | 'unknown' =
+      electricityAvailable === null ? 'unknown' : electricityAvailable ? 'online' : 'offline';
+
+    const scheduleState: 'power' | 'outage' | 'unknown' =
+      scheduleNow.expectedPowerNow === null ? 'unknown' : scheduleNow.expectedPowerNow ? 'power' : 'outage';
+
+    const matchWithSchedule: boolean | null =
+      electricityAvailable === null || scheduleNow.expectedPowerNow === null
+        ? null
+        : (electricityAvailable && scheduleNow.expectedPowerNow) ||
+        (!electricityAvailable && !scheduleNow.expectedPowerNow);
+
+    const palette =
+      electricityAvailable === true && matchWithSchedule === true
+        ? {
+          container: theme.colors.secondaryContainer,
+          onContainer: theme.colors.onSecondaryContainer,
+          icon: 'check-circle-outline',
+        }
+        : electricityAvailable === true && matchWithSchedule === false
+          ? {
+            container: theme.colors.errorContainer,
+            onContainer: theme.colors.onErrorContainer,
+            icon: 'alert-circle-outline',
+          }
+          : {
+            container: theme.colors.surfaceVariant,
+            onContainer: theme.colors.onSurfaceVariant,
+            icon: devicesState === 'unknown' ? 'help-circle-outline' : 'information-outline',
+          };
+
+    const title =
+      devicesState === 'online'
+        ? 'Розумні пристрої відповідають'
+        : devicesState === 'offline'
+          ? 'Розумні пристрої не відповідають'
+          : 'Перевірка розумних пристроїв';
+
+    const smallStatus = devicesState === 'online' ? 'Онлайн' : devicesState === 'offline' ? 'Офлайн' : 'Невідомо';
+
+    const scheduleLine =
+      scheduleState === 'power'
+        ? 'За графіком зараз: світло має бути'
+        : scheduleState === 'outage'
+          ? 'За графіком зараз: планове відключення'
+          : 'За графіком зараз: немає даних';
+
+    const showMatch = electricityAvailable === true && scheduleNow.expectedPowerNow !== null;
+
+    const matchLine =
+      matchWithSchedule === true ? 'Збіг за графіком: так' : matchWithSchedule === false ? 'Збіг за графіком: ні' : null;
+
+    const detailsLine =
+      scheduleNow.activeOutage
+        ? `Активне вікно: ${extractTimeLabel(scheduleNow.activeOutage.start)} — ${extractTimeLabel(
+          scheduleNow.activeOutage.end,
+        )}`
+        : null;
+
+    return (
+      <View style={[styles.banner, {backgroundColor: palette.container}]}>
+        <View style={styles.bannerRow}>
+          <IconButton
+            icon={palette.icon}
+            size={22}
+            iconColor={palette.onContainer}
+            style={styles.bannerIcon}
+            disabled
+          />
+
+          <View style={styles.bannerText}>
+            <Text style={[styles.bannerTitle, {color: palette.onContainer}]}>{title}</Text>
+
+            <View style={styles.bannerMetaRow}>
+              <Text style={[styles.bannerSmall, {color: palette.onContainer}]}>{smallStatus}</Text>
+
+              <View style={styles.bannerRight}>
+                {electricityChecking ? <ActivityIndicator size="small" /> : null}
+              </View>
+            </View>
+
+            <Text style={[styles.bannerCaption, {color: palette.onContainer}]}>{scheduleLine}</Text>
+
+            {showMatch && matchLine && (
+              <Text style={[styles.bannerCaption, {color: palette.onContainer}]}>
+                {matchLine}
+                {detailsLine ? ` · ${detailsLine}` : ''}
+              </Text>
+            )}
+          </View>
+        </View>
+      </View>
+    );
+  };
 
   return (
     <>
@@ -519,78 +605,48 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
           title="Графік відключення світла"
           subtitle="Персональні графіки для Чернігова"
           titleVariant="titleMedium"
-          right={props => (
-            <IconButton
-              {...props}
-              icon="plus"
-              onPress={openNewAddressDialog}
-            />
-          )}
+          right={props => <IconButton {...props} icon="plus" onPress={openNewAddressDialog} />}
         />
 
         <Card.Content>
-
-          <Divider style={styles.divider} />
-
-          {/* Empty state */}
           {addresses.length === 0 && (
             <View style={styles.emptyState}>
-              <Text style={styles.emptyTitle}>
-                Немає жодної адреси
-              </Text>
+              <Text style={styles.emptyTitle}>Немає жодної адреси</Text>
               <Text style={styles.emptyText}>
-                Додайте одну або кілька адрес, щоб відображати персональний
-                графік відключення світла.
+                Додайте одну або кілька адрес, щоб відображати персональний графік відключення світла.
               </Text>
             </View>
           )}
 
-          {/* Address cards */}
           {addresses.length > 0 && (
             <View style={styles.addressList}>
               {addresses.map((addr, idx) => {
-                const itemsForDay =
-                  selectedDate
-                    ? addr.items.filter(item =>
-                      isSameDayIso(item.start, selectedDate) ||
-                      isSameDayIso(item.end, selectedDate),
-                    )
-                    : addr.items;
+                const itemsForDay = selectedDate
+                  ? addr.items.filter(
+                    item => isSameDayIso(item.start, selectedDate) || isSameDayIso(item.end, selectedDate),
+                  )
+                  : addr.items;
 
                 const hasAnyItems = addr.items.length > 0;
 
                 return (
-                  <View
-                    key={addr.config.id}
-                    style={styles.addressBlock}>
-
+                  <View key={addr.config.id} style={styles.addressBlock}>
                     <View style={styles.addressHeaderRow}>
                       <View style={styles.addressTitleRow}>
                         <IconButton
-                          icon={
-                            addr.config.consumerKind === 'business'
-                              ? 'office-building'
-                              : 'home-city-outline'
-                          }
+                          icon={addr.config.consumerKind === 'business' ? 'office-building' : 'home-city-outline'}
                           size={26}
                           disabled
                         />
                         <View style={styles.addressTitleWrapper}>
-                          <Text style={styles.addressTitle}>
-                            {makeAddressTitle(addr.config)}
-                          </Text>
+                          <Text style={styles.addressTitle}>{makeAddressTitle(addr.config)}</Text>
                         </View>
                       </View>
                     </View>
 
-                    {/* Дії над адресою */}
                     <View style={styles.addressActionsRow}>
                       <View style={styles.addressActions}>
-                        <IconButton
-                          icon="tune-variant"
-                          size={20}
-                          onPress={() => openEditDialog(addr)}
-                        />
+                        <IconButton icon="tune-variant" size={20} onPress={() => openEditDialog(addr)} />
                         <IconButton
                           icon="refresh"
                           size={20}
@@ -605,112 +661,72 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
                       </View>
                     </View>
 
-                    {/* Loading */}
                     {addr.loading && (
                       <View style={styles.loadingRow}>
                         <ActivityIndicator />
-                        <Text style={styles.loadingText}>
-                          Отримуємо інформацію про можливі відключення…
-                        </Text>
+                        <Text style={styles.loadingText}>Отримуємо інформацію про можливі відключення…</Text>
                       </View>
                     )}
 
-                    {/* Error */}
                     {!addr.loading && addr.error && (
                       <View style={styles.errorCard}>
                         <Text style={styles.errorTitle}>Помилка</Text>
-                        <Text style={styles.errorText}>
-                          {addr.error}
+                        <Text style={styles.errorText}>{addr.error}</Text>
+                      </View>
+                    )}
+
+                    {!addr.loading && !addr.error && !hasAnyItems && (
+                      <View style={styles.emptyState}>
+                        <Text style={styles.emptyTitle}>Немає запланованих обмежень</Text>
+                        <Text style={styles.emptyText}>
+                          Наразі для цієї адреси не знайдено жодного запланованого відключення.
                         </Text>
                       </View>
                     )}
 
-                    {/* Немає графіка взагалі */}
-                    {!addr.loading &&
-                      !addr.error &&
-                      !hasAnyItems && (
-                        <View style={styles.emptyState}>
-                          <Text style={styles.emptyTitle}>
-                            Немає запланованих обмежень
-                          </Text>
-                          <Text style={styles.emptyText}>
-                            Наразі для цієї адреси не знайдено жодного
-                            запланованого відключення.
-                          </Text>
-                        </View>
-                      )}
+                    {!addr.loading && !addr.error && hasAnyItems && itemsForDay.length === 0 && (
+                      <View style={styles.emptyState}>
+                        <Text style={styles.emptyTitle}>На цю дату немає відключень</Text>
+                        <Text style={styles.emptyText}>На обрану дату не знайдено запланованих обмежень.</Text>
+                      </View>
+                    )}
 
-                    {/* Немає на обрану дату */}
-                    {!addr.loading &&
-                      !addr.error &&
-                      hasAnyItems &&
-                      itemsForDay.length === 0 && (
-                        <View style={styles.emptyState}>
-                          <Text style={styles.emptyTitle}>
-                            На цю дату немає відключень
-                          </Text>
-                          <Text style={styles.emptyText}>
-                            На обрану дату не знайдено запланованих обмежень.
-                          </Text>
-                        </View>
-                      )}
+                    {!addr.loading && !addr.error && itemsForDay.length > 0 && (
+                      <View style={styles.scheduleContainer}>
+                        {!selectedDate && <Text style={styles.sectionTitle}>Найближчі відключення</Text>}
+                        <Divider style={styles.sectionDivider} />
 
-                    {/* Список відключень */}
-                    {!addr.loading &&
-                      !addr.error &&
-                      itemsForDay.length > 0 && (
-                        <View style={styles.scheduleContainer}>
-                          {!selectedDate && (
-                            <Text style={styles.sectionTitle}>
-                              Найближчі відключення
-                            </Text>
-                          )}
+                        {itemsForDay.map(item => {
+                          const from = extractTimeLabel(item.start);
+                          const to = extractTimeLabel(item.end);
+                          const duration = formatDuration(item.start, item.end);
 
-                          <Divider style={styles.sectionDivider} />
-
-                          {itemsForDay.map(item => {
-                            const from = extractTimeLabel(item.start);
-                            const to = extractTimeLabel(item.end);
-                            const duration = formatDuration(
-                              item.start,
-                              item.end,
-                            );
-
-                            return (
-                              <View
-                                key={item.id}
-                                style={styles.item}>
-                                <View style={styles.itemRow}>
-                                  <IconButton
-                                    icon="power-plug-off-outline"
-                                    size={22}
-                                    disabled
-                                  />
-                                  <View style={styles.timeBlock}>
-                                    <Text style={styles.itemTime}>
-                                      {from} — {to}
-                                    </Text>
-                                    {!!duration && (
-                                      <Text style={styles.itemDuration}>
-                                        {duration}
-                                      </Text>
-                                    )}
-                                  </View>
+                          return (
+                            <View key={item.id} style={styles.item}>
+                              <View style={styles.itemRow}>
+                                <IconButton icon="power-plug-off-outline" size={22} disabled />
+                                <View style={styles.timeBlock}>
+                                  <Text style={styles.itemTime}>
+                                    {from} — {to}
+                                  </Text>
+                                  {!!duration && <Text style={styles.itemDuration}>{duration}</Text>}
                                 </View>
                               </View>
-                            );
-                          })}
-                        </View>
-                      )}
-
-                    {idx < addresses.length - 1 && (
-                      <Divider style={styles.addressDivider} />
+                            </View>
+                          );
+                        })}
+                      </View>
                     )}
+
+                    {idx < addresses.length - 1 && <Divider style={styles.addressDivider} />}
                   </View>
                 );
               })}
             </View>
           )}
+
+          <Divider style={styles.divider} />
+          {renderElectricityBanner()}
         </Card.Content>
       </Card>
 
@@ -724,19 +740,13 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
                 <Chip
                   selected={consumerKind === 'household'}
                   onPress={handleSelectHousehold}
-                  icon={
-                    consumerKind === 'household' ? 'home' : undefined
-                  }>
+                  icon={consumerKind === 'household' ? 'home' : undefined}>
                   Побутові
                 </Chip>
                 <Chip
                   selected={consumerKind === 'business'}
                   onPress={handleSelectBusiness}
-                  icon={
-                    consumerKind === 'business'
-                      ? 'office-building'
-                      : undefined
-                  }>
+                  icon={consumerKind === 'business' ? 'office-building' : undefined}>
                   Юридичні
                 </Chip>
               </View>
@@ -762,13 +772,7 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
                         value={selectedDepartment?.label ?? ''}
                         editable={false}
                         pointerEvents="none"
-                        right={
-                          <TextInput.Icon
-                            icon={
-                              departMenuVisible ? 'menu-up' : 'menu-down'
-                            }
-                          />
-                        }
+                        right={<TextInput.Icon icon={departMenuVisible ? 'menu-up' : 'menu-down'} />}
                       />
                     </Pressable>
                   }>
@@ -798,24 +802,14 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
                 label="Назва міста / села"
                 value={cityQuery}
                 onChangeText={handleCityInputChange}
-                right={
-                  cityLoading ? (
-                    <TextInput.Icon
-                      icon={() => <ActivityIndicator size="small" />}
-                    />
-                  ) : undefined
-                }
+                right={cityLoading ? <TextInput.Icon icon={() => <ActivityIndicator size="small" />} /> : undefined}
               />
               {cities.length > 0 && (
                 <View style={styles.listContainer}>
                   {cities.map(city => (
                     <Button
                       key={city.id}
-                      mode={
-                        selectedCity?.id === city.id
-                          ? 'contained-tonal'
-                          : 'text'
-                      }
+                      mode={selectedCity?.id === city.id ? 'contained-tonal' : 'text'}
                       onPress={() => handleSelectCity(city)}
                       style={styles.listItemBtn}
                       contentStyle={styles.listItemBtnContent}>
@@ -825,34 +819,20 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
                 </View>
               )}
 
-              <Text style={styles.sectionLabel}>
-                {consumerKind === 'business'
-                  ? 'Юридична особа'
-                  : 'Вулиця'}
-              </Text>
+              <Text style={styles.sectionLabel}>{consumerKind === 'business' ? 'Юридична особа' : 'Вулиця'}</Text>
               <TextInput
                 mode="outlined"
                 label={secondLevelLabel}
                 value={streetQuery}
                 onChangeText={handleStreetInputChange}
-                right={
-                  streetLoading ? (
-                    <TextInput.Icon
-                      icon={() => <ActivityIndicator size="small" />}
-                    />
-                  ) : undefined
-                }
+                right={streetLoading ? <TextInput.Icon icon={() => <ActivityIndicator size="small" />} /> : undefined}
               />
               {streets.length > 0 && (
                 <View style={styles.listContainer}>
                   {streets.map(street => (
                     <Button
                       key={street.id}
-                      mode={
-                        selectedStreet?.id === street.id
-                          ? 'contained-tonal'
-                          : 'text'
-                      }
+                      mode={selectedStreet?.id === street.id ? 'contained-tonal' : 'text'}
                       onPress={() => handleSelectStreet(street)}
                       style={styles.listItemBtn}
                       contentStyle={styles.listItemBtnContent}>
@@ -862,26 +842,15 @@ const PowerBlock: React.FC<Props> = ({selectedDate}) => {
                 </View>
               )}
 
-              <Text style={styles.sectionLabel}>
-                Номер будинку (фільтр, необовʼязково)
-              </Text>
-              <TextInput
-                mode="outlined"
-                label="Наприклад: 12 або 10-16"
-                value={house}
-                onChangeText={setHouse}
-              />
+              <Text style={styles.sectionLabel}>Номер будинку (фільтр, необовʼязково)</Text>
+              <TextInput mode="outlined" label="Наприклад: 12 або 10-16" value={house} onChangeText={setHouse} />
 
-              {configError && (
-                <Text style={styles.errorText}>{configError}</Text>
-              )}
+              {configError && <Text style={styles.errorText}>{configError}</Text>}
             </ScrollView>
           </Dialog.ScrollArea>
           <Dialog.Actions>
             <Button onPress={closeDialog}>Скасувати</Button>
-            <Button onPress={handleApplyConfig}>
-              Зберегти і оновити
-            </Button>
+            <Button onPress={handleApplyConfig}>Зберегти і оновити</Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>
@@ -896,34 +865,10 @@ const styles = StyleSheet.create({
     marginTop: 12,
     borderRadius: 18,
   },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-start',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#4caf50',
-    marginRight: 6,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
   divider: {
-    marginTop: 4,
-    marginBottom: 8,
+    marginTop: 10,
+    marginBottom: 10,
+    opacity: 0.5,
   },
   loadingRow: {
     flexDirection: 'row',
@@ -943,10 +888,8 @@ const styles = StyleSheet.create({
   errorTitle: {
     fontWeight: '600',
     marginBottom: 2,
-    color: '#d32f2f',
   },
   errorText: {
-    color: '#d32f2f',
     marginTop: 4,
     fontSize: 12,
   },
@@ -959,7 +902,48 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 13,
-    color: '#666',
+    opacity: 0.75,
+  },
+  banner: {
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+  },
+  bannerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  bannerIcon: {
+    margin: 0,
+  },
+  bannerText: {
+    flex: 1,
+    paddingTop: 2,
+  },
+  bannerTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    opacity: 0.9,
+  },
+  bannerMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
+  bannerSmall: {
+    fontSize: 12,
+    fontWeight: '800',
+    opacity: 0.9,
+  },
+  bannerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  bannerCaption: {
+    marginTop: 6,
+    fontSize: 11,
+    opacity: 0.85,
   },
   addressList: {
     marginTop: 4,
@@ -973,7 +957,6 @@ const styles = StyleSheet.create({
     borderColor: '#ddd',
     backgroundColor: 'rgba(0,0,0,0.02)',
   },
-
   addressHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -992,18 +975,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     flexShrink: 1,
   },
-  addressKindPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: 'rgba(33,150,243,0.08)',
-  },
-  addressKindText: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: '#1976d2',
-  },
-
   addressActionsRow: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
@@ -1015,12 +986,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-
   addressDivider: {
     marginTop: 8,
     opacity: 0.4,
   },
-
   scheduleContainer: {
     marginTop: 4,
   },
@@ -1052,7 +1021,6 @@ const styles = StyleSheet.create({
     opacity: 0.7,
     marginTop: 2,
   },
-
   dialogScrollArea: {
     maxHeight: 420,
   },
