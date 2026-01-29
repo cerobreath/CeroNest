@@ -1,6 +1,36 @@
-![CeroNest Banner](screenshots/header-banner.png)
+<p align="center">
+  <img src="docs/images/logo.svg" alt="CeroNest" width="120" />
+</p>
 
-**Local-first smart home system designed for unstable power grids.**
+<h1 align="center">CeroNest</h1>
+
+<p align="center">
+  Local-first smart home system designed for unstable power grids.
+</p>
+
+<p align="center">
+  <a href="https://github.com/cerobreath/CeroNest/releases/latest">
+    <img
+      alt="Download APK"
+      src="https://img.shields.io/badge/Android-Download%20Latest-2ea44f?style=for-the-badge"
+    />
+  </a>
+  <a href="#quick-start">
+    <img
+      alt="Quick Start"
+      src="https://img.shields.io/badge/Quick%20Start-Setup-1f6feb?style=for-the-badge"
+    />
+  </a>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#tech-stack">Tech Stack</a>
+</p>
+
+---
 
 CeroNest is a React Native mobile app paired with ESP8266-based sensors that monitors indoor climate, tracks bathroom light status, and displays power outage schedules. Built specifically for real-world conditions in Ukraine (Chernihiv), it prioritizes offline functionality and local network resilience.
 
@@ -17,18 +47,17 @@ CeroNest is a React Native mobile app paired with ESP8266-based sensors that mon
 ## Screenshots
 
 ### Mobile App
-![Mobile UI](screenshots/02-mobile-ui.png)
+![Mobile UI](docs/images/mobile-ui.png)
 
 ### Hardware
-| ESP Bath Light                                                  | ESP Climate Room                                     |
-|-----------------------------------------------------------------|---------------------------------------------------------------------|
-| ![Light schematic](screenshots/04-esp-bath-light-schematic.png) | ![Climate schematic](screenshots/03-esp-climate-room-schematic.png) |
+|          ESP Climate Room |               ESP Bath Light                                    |
+|-------------------------|-------------------------------------------------------------------|
+|                   ![Climate schematic](docs/images/esp-climate-room-schematic.png)      |  ![Light schematic](docs/images/esp-bath-light-schematic.png) |
 
-![Real wiring](screenshots/05-real-wiring.png)
 
 ## Architecture
 
-![System overview](screenshots/01-architecture.png)
+![System overview](docs/images/architecture.png)
 
 **Data flow:**
 1. ESP devices expose HTTP endpoint: `GET /ceronest/info`
@@ -62,7 +91,9 @@ CeroNest is a React Native mobile app paired with ESP8266-based sensors that mon
 ```bash
 cd mobile
 npm install
-npm run android
+cd android
+./gradlew assembleRelease
+adb install -r app/build/outputs/apk/release/app-release.ap
 ```
 
 ### ESP Devices
@@ -70,10 +101,10 @@ npm run android
 1. Open `.ino` files in Arduino IDE or PlatformIO
 2. Configure WiFi credentials:
    ```cpp
-   #define WIFI_SSID "your_network"
-   #define WIFI_PASS "your_password"
-   #define WIFI_SSID_BACKUP "phone_hotspot"  // fallback
-   #define WIFI_PASS_BACKUP "hotspot_pass"
+   #define WIFI_SSID "YOUR_SSID"
+   #define WIFI_PASS "YOUR_PASSWORD"
+   #define WIFI_SSID_BACKUP "YOUR_PHONE_HOTSPOT"
+   #define WIFI_PASS_BACKUP "YOUR_PHONE_PASSWORD"
    ```
 3. Flash to NodeMCU
 4. Note the IP shown on OLED display
@@ -100,10 +131,12 @@ npm run android
 - NodeMCU ESP8266
 - LM393 LDR module (digital output)
 - 0.96" OLED I2C (SSD1306)
+- Buzzer 3V
 
 **Wiring:**
 - OLED: SDA → D5 (GPIO14), SCL → D6 (GPIO12)
-- LM393: DO → D3 (GPIO0), VCC → 3.3V, GND → GND
+- LM393: DO → D4 (GPIO2), VCC → 3.3V, GND → GND
+- Buzzer: + -> D3 (GPIO), GND → GND
 
 **Code:** `esp/esp-bath-light/esp-bath-light.ino`
 
